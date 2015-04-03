@@ -1,0 +1,9 @@
+*~
+*.swp
+*.kate-swp
+*.pdf
+
+
+*.o
+a.out
+ui2c-ds1307
