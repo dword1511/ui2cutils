@@ -197,9 +197,25 @@ int weekday2c(uint8_t wkd, const char **c) {
   }
 }
 
+bool isbcd(uint8_t i) {
+  int h = i >> 4;
+  int l = i & 0x0f;
+
+  if ((h < 10) || (l < 10)) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
 uint8_t bcd2i(uint8_t bcd) {
   /* This function does NOT validate BCD. */
   return (bcd >> 4) * 10 + (bcd & 0x0f);
+}
+
+uint8_t i2bcd(uint8_t i) {
+  /* This function does NOT validate range. */
+  return ((i / 10) << 4) | (i % 10);
 }
 
 int ds1307_print_time(int file) {
@@ -265,9 +281,9 @@ int ds1307_print_time(int file) {
     return res;
   }
   if (h12) {
-    fprintf(stdout, "20%02d-%02d-%02d %s %s %02d:%02d:%02d %s\n", yrs, mon, day, dows, hpm ? "PM" : "AM", hrs, min, sec, hlt ? "HALTED" : "RUNNING");
+    fprintf(stdout, "20%02d-%02d-%02d %s %s %02d:%02d:%02d %s 12H\n", yrs, mon, day, dows, hpm ? "PM" : "AM", hrs, min, sec, hlt ? "HALTED" : "RUNNING");
   } else {
-    fprintf(stdout, "20%02d-%02d-%02d %s %02d:%02d:%02d %s\n", yrs, mon, day, dows, hrs, min, sec, hlt ? "HALTED" : "RUNNING");
+    fprintf(stdout, "20%02d-%02d-%02d %s    %02d:%02d:%02d %s 24H\n", yrs, mon, day, dows, hrs, min, sec, hlt ? "HALTED" : "RUNNING");
   }
 
   return 0;
@@ -298,6 +314,175 @@ int ds1307_halt(int file, bool halt) {
   return 0;
 }
 
+int ds1307_sanity_check(int file, bool *ok) {
+  int res;
+  uint8_t reg;
+
+  if (NULL == ok) {
+    return -EFAULT;
+  }
+
+  /* Second */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_SEC, &reg)) < 0) {
+    return res;
+  }
+  reg &= (~DS1307_HALT);
+  if ((!isbcd(reg)) || (bcd2i(reg) > 59)) {
+    *ok = false;
+    return 0;
+  }
+
+  /* Minute */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_MIN, &reg)) < 0) {
+    return res;
+  }
+  if ((!isbcd(reg)) || (bcd2i(reg) > 59)) {
+    *ok = false;
+    return 0;
+  }
+
+  /* Hour */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_HRS, &reg)) < 0) {
+    return res;
+  }
+  bool h12 = (reg & DS1307_12H_MODE) ? true : false;
+  reg &= (~DS1307_12H_MODE);
+  if (h12) {
+    reg &= (~DS1307_12H_PM);
+    if ((!isbcd(reg)) || (bcd2i(reg) > 12) || (0 == bcd2i(reg))) {
+      *ok = false;
+      return 0;
+    }
+  } else {
+    if ((!isbcd(reg)) || (bcd2i(reg) > 23)) {
+      *ok = false;
+      return 0;
+    }
+  }
+
+  /* Day of Week */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_DOW, &reg)) < 0) {
+    return res;
+  }
+  if ((!isbcd(reg)) || (bcd2i(reg) > 7) || (0 == bcd2i(reg))) {
+    *ok = false;
+    return 0;
+  }
+
+  /* Day */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_DAY, &reg)) < 0) {
+    return res;
+  }
+  if ((!isbcd(reg)) || (bcd2i(reg) > 31) || (0 == bcd2i(reg))) {
+    *ok = false;
+    return 0;
+  }
+
+  /* Month */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_MON, &reg)) < 0) {
+    return res;
+  }
+  if ((!isbcd(reg)) || (bcd2i(reg) > 12) || (0 == bcd2i(reg))) {
+    *ok = false;
+    return 0;
+  }
+
+  /* Year */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_YRS, &reg)) < 0) {
+    return res;
+  }
+  if (!isbcd(reg)) {
+    *ok = false;
+    return 0;
+  }
+  /* TODO: YMD cross validation with leap-year awareness */
+
+  /* Control */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_YRS, &reg)) < 0) {
+    return res;
+  }
+  reg &= (~(DS1307_SQW_OUT | DS1307_SQW_EN | DS1307_SQW_RS1 | DS1307_SQW_RS0));
+  if (0 != reg) {
+    *ok = false;
+    return 0;
+  }
+
+  /* All pass */
+  *ok = true;
+  return 0;
+}
+
+int ds1307_set_hfmt(int file, bool h12) {
+  /* Set 12H/24H */
+  /* TODO: wait if time is 59:59 and is not halted, so we do not cause glitch. */
+
+  int res;
+  uint8_t hrs;
+  bool oldh12;
+
+  if ((res = i2c_read_byte(file, DS1307_REGAD_HRS, &hrs)) < 0) {
+    return res;
+  }
+  oldh12 = (hrs & DS1307_12H_MODE) ? true : false;
+  hrs &= (~DS1307_12H_MODE);
+
+  if (h12) {
+    if (oldh12) {
+      fputs("Hour format is already set to 12H\n", stdout);
+      return 0;
+    } else {
+      bool pm = false;
+      hrs = bcd2i(hrs);
+      if (hrs > 12) {
+        hrs -= 12;
+        pm = true;
+      }
+      if (12 == hrs) {
+        pm = true;
+      }
+      if (0 == hrs) {
+        /* 00:00 = 12:00 AM */
+        hrs = 12;
+      }
+      hrs = i2bcd(hrs);
+      hrs |= DS1307_12H_MODE;
+      if (pm) {
+        hrs |= DS1307_12H_PM;
+      }
+    }
+  } else {
+    if (!oldh12) {
+      fputs("Hour format is already set to 24H\n", stdout);
+      return 0;
+    } else {
+      bool pm = hrs & DS1307_12H_PM;
+      hrs &= (~DS1307_12H_PM);
+      hrs = bcd2i(hrs);
+      if (pm) {
+        hrs += 12;
+        if (24 == hrs) {
+          /* Was 12:00 PM, = 12:00 */
+          hrs = 12;
+        }
+      } else {
+        if (12 == hrs) {
+          /* 12:00 AM = 0:00 */
+          hrs = 0;
+        }
+      }
+      hrs = i2bcd(hrs);
+    }
+  }
+
+  if ((res = i2c_write_byte(file, DS1307_REGAD_HRS, hrs)) < 0) {
+    return res;
+  }
+
+  fprintf(stdout, "Hour format set to %s (0x%02x)\n", h12 ? "12H" : "24H", hrs);
+
+  return 0;
+}
+
 // memory test / sanity check
 // dump ram
 
@@ -308,8 +493,11 @@ int ds1307_halt(int file, bool halt) {
  * p - print date / time
  * h - clear halt bit
  * H - set halt bit
+ * c - chip sanity check
+ * 1 - set 12H format
+ * 2 - set 24H format
  * TODO:
- * chip sanity check
+ * 
  * dump ram
  * ram test
  * set date
@@ -326,15 +514,21 @@ void print_help(const char *self) {
   Bus number and address can be overrided in the middle of the list.\n\
   \n\
   List of operations:\n\
-    -a <int>: override device address (default: 0x%02x).\n\
+    -1      : set 12-hour format.\n\
+    -2      : set 24-hour format.\n\
+    -a <int>: override device address (default: 0x%02x, in range 0x03 to 0x7f).\n\
               NOTE: this value will NOT be reset to default after switching bus.\n\
+              WARN: use this option only when you know what you are doing!\n\
     -b <int>: set bus number (must be set prior to any operations).\n\
+              NOTE: you can use `i2cdetect -l' to list I2C buses present in the system.\n\
+    -c      : chip sanity check.\n\
     -h      : clear halt bit (start the clock).\n\
     -H      : set halt bit (pause the clock).\n\
     -p      : print current date and time in the device.\n\
   \n\
   Example:\n\
-    %s -b 1 -h -p\n\
+    Print date and time in the DS1307 on i2c-1:\n\
+      %s -b 1 -h -p\n\
   \n", self, DS1307_DEVAD, self);
 }
 
@@ -346,6 +540,36 @@ void handle_bad_opts(void) {
   } else {
     fprintf(stderr, "ERROR: unknown option character `\\x%x'.\n\n", optopt);
   }
+}
+
+int read_int(const char *s) {
+  /* convert a base 8 / 10 / 16 number in string into integer */
+  int i = -EIO;
+
+  if (NULL == s) {
+    return -EFAULT;
+  }
+
+  if ('0' == s[0]) {
+    if (('x' == s[1]) || ('X' == s[1])) {
+      /* Hex */
+      if (sscanf(&s[2], "%x", &i) != 1) {
+        return -EINVAL;
+      }
+    } else {
+      /* Oct */
+      if (sscanf(s, "%o", &i) != 1) {
+        return -EINVAL;
+      }
+    }
+  } else {
+    /* Dec */
+    if (sscanf(s, "%d", &i) != 1) {
+      return -EINVAL;
+    }
+  }
+
+  return i;
 }
 
 int main(int argc, char *argv[]) {
@@ -360,11 +584,37 @@ int main(int argc, char *argv[]) {
   int c;
   int ad = DS1307_DEVAD;
   opterr = 0;
-  while ((c = getopt(argc, argv, "a:b:phH")) != -1) {
+  while ((c = getopt(argc, argv, "12a:b:cphH")) != -1) {
     switch (c) {
+      case '1':
+      case '2': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_set_hfmt(file, '1' == c)) < 0) {
+          return res;
+        }
+
+        break;
+      }
+
       case 'a': {
         if (file < 0) {
           fprintf(stderr, "ERROR: bus number not set prior to address selection.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((ad = read_int(optarg)) < 0) {
+          fprintf(stderr, "ERROR: invalid slave address `%s'.\n\n", optarg);
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+        if ((ad < 0x03) || (ad > 0x7f)) {
+          fprintf(stderr, "ERROR: invalid slave address `%s' (out of valid range of 0x03 to 0x7f).\n\n", optarg);
           print_help(argv[0]);
           return -EINVAL;
         }
@@ -373,6 +623,7 @@ int main(int argc, char *argv[]) {
           return res;
         }
 
+        fprintf(stdout, "Address set to 0x%02x\n", ad);
         break;
       }
 
@@ -384,20 +635,37 @@ int main(int argc, char *argv[]) {
         }
 
         int bn;
-        if ((res = sscanf(optarg, "%d", &bn)) == 1) {
-          if ((file = i2c_open(bn)) < 0) {
-            return file;
-          }
-
-          if ((res = i2c_select(file, ad)) < 0) {
-            return res;
-          }
-        } else {
+        if ((bn = read_int(optarg)) < 0) {
           fprintf(stderr, "ERROR: invalid bus number `%s'.\n\n", optarg);
           print_help(argv[0]);
           return -EINVAL;
         }
 
+        if ((file = i2c_open(bn)) < 0) {
+          return file;
+        }
+
+        if ((res = i2c_select(file, ad)) < 0) {
+          return res;
+        }
+
+        fprintf(stdout, "Address set to 0x%02x\n", ad);
+        break;
+      }
+
+      case 'c': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        bool ok;
+        if ((res = ds1307_sanity_check(file, &ok)) < 0) {
+          return res;
+        }
+
+        fprintf(stdout, "Sanity check: %s\n", ok ? "PASS" : "FAIL");
         break;
       }
 
@@ -412,17 +680,7 @@ int main(int argc, char *argv[]) {
         break;
       }
 
-      case 'h': {
-        if (file < 0) {
-          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
-          print_help(argv[0]);
-          return -EINVAL;
-        }
-
-        ds1307_halt(file, false);
-        break;
-      }
-
+      case 'h':
       case 'H': {
         if (file < 0) {
           fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
@@ -430,7 +688,7 @@ int main(int argc, char *argv[]) {
           return -EINVAL;
         }
 
-        ds1307_halt(file, true);
+        ds1307_halt(file, 'H' == c);
         break;
       }
 
