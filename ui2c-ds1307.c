@@ -9,7 +9,6 @@
 
 #include <linux/i2c-dev.h>
 
-#define BUS_NO 1 /* use i2c-1 */
 
 /* DS1307 Definations */
 /* Global */
@@ -302,6 +301,10 @@ int ds1307_halt(int file, bool halt) {
   if (halt) {
     sec |= DS1307_HALT;
   } else {
+    if (false == (sec & DS1307_HALT)) {
+      fprintf(stdout, "Halt bit is already cleared (0x%02x)\n", sec);
+      return 0;
+    }
     sec &= (~DS1307_HALT);
   }
 
@@ -504,7 +507,66 @@ int ds1307_dump(int file, uint8_t start, uint8_t count) {
   return 0;
 }
 
-// memory test / sanity check
+int ds1307_test_ram_byte(int file, uint8_t byte) {
+  /* Intended for internal use only. */
+
+  int ad;
+  int res;
+
+  /* Write */
+  for (ad = DS1307_REGAD_RAM; ad < DS1307_REGAD_END; ad ++) {
+    if ((res = i2c_write_byte(file, ad, byte)) < 0) {
+      return res;
+    }
+  }
+
+  /* Read and compare */
+  uint8_t reg;
+  for (ad = DS1307_REGAD_RAM; ad < DS1307_REGAD_END; ad ++) {
+    if ((res = i2c_read_byte(file, ad, &reg)) < 0) {
+      return res;
+    }
+    if (reg != byte) {
+      fprintf(stdout, "Register @ 0x%02x is bad: expect 0x%02x, got 0x%02x\n", ad, byte, reg);
+      /* This is not a fault error (for the program), so continue to check other registers. */
+    }
+  }
+
+  return 0;
+}
+
+int ds1307_test_ram(int file) {
+  int res;
+  int bit;
+
+  /* Walk 1 */
+  for (bit = 0; bit < 8; bit ++) {
+    if ((res = ds1307_test_ram_byte(file, 1 << bit)) < 0) {
+      return res;
+    }
+    fprintf(stdout, "Done checking 0x%02x\n", 1 << bit);
+  }
+
+  /* 0x55, 0xaa, 0x00 and 0xff */
+  if ((res = ds1307_test_ram_byte(file, 0x55)) < 0) {
+    return res;
+  }
+  fprintf(stdout, "Done checking 0x%02x\n", 0x55);
+  if ((res = ds1307_test_ram_byte(file, 0xaa)) < 0) {
+    return res;
+  }
+  fprintf(stdout, "Done checking 0x%02x\n", 0xaa);
+  if ((res = ds1307_test_ram_byte(file, 0xff)) < 0) {
+    return res;
+  }
+  fprintf(stdout, "Done checking 0x%02x\n", 0xff);
+  if ((res = ds1307_test_ram_byte(file, 0x00)) < 0) {
+    return res;
+  }
+  fprintf(stdout, "Done checking 0x%02x\n", 0x00);
+
+  return 0;
+}
 
 /******************************************************************************
  * Option list (operations will be carried out in argument list order):
@@ -518,9 +580,9 @@ int ds1307_dump(int file, uint8_t start, uint8_t count) {
  * p - print date / time
  * h - clear halt bit
  * H - set halt bit
+ * t - test ram
  * TODO:
  * 
- * ram test
  * set date
  * sqw info
  * set sqw
@@ -538,16 +600,23 @@ void print_help(const char *self) {
     -1      : set 12-hour format.\n\
     -2      : set 24-hour format.\n\
     -a <int>: override device address (default: 0x%02x, in range 0x03 to 0x7f).\n\
-              NOTE: this value will NOT be reset to default after switching bus.\n\
+              NOTE: this value will NOT be reset to default after switching\n\
+                    bus.\n\
               WARN: use this option only when you know what you are doing!\n\
     -b <int>: set bus number (must be set prior to any operations).\n\
-              NOTE: you can use `i2cdetect -l' to list I2C buses present in the system.\n\
+              NOTE: you can use `i2cdetect -l' to list I2C buses present in the\n\
+              system.\n\
     -c      : chip sanity check.\n\
-    -d      : dump the on-chip NV SRAM.\n\
+    -d      : dump on-chip NV SRAM.\n\
+              NOTE: it is normal for some bits to be 1 after power-on-reset.\n\
     -D      : dump all registers, for debugging.\n\
     -h      : clear halt bit (start the clock).\n\
     -H      : set halt bit (pause the clock).\n\
     -p      : print current date and time in the device.\n\
+    -t      : test on-chip NV SRAM.\n\
+              NOTE: The chip may go offline during the process, you will need\n\
+              to reset the chip manually. Suggest halting the clock before\n\
+              checking to avoid possible hardware bugs.\n\
   \n\
   Example:\n\
     Print date and time in the DS1307 on i2c-1:\n\
@@ -607,7 +676,7 @@ int main(int argc, char *argv[]) {
   int c;
   int ad = DS1307_DEVAD;
   opterr = 0;
-  while ((c = getopt(argc, argv, "12a:b:cdDphH")) != -1) {
+  while ((c = getopt(argc, argv, "12a:b:cdDhHpt")) != -1) {
     switch (c) {
       case '1':
       case '2': {
@@ -618,9 +687,9 @@ int main(int argc, char *argv[]) {
         }
 
         if ((res = ds1307_set_hfmt(file, '1' == c)) < 0) {
+          close(file);
           return res;
         }
-
         break;
       }
 
@@ -643,6 +712,7 @@ int main(int argc, char *argv[]) {
         }
 
         if ((res = i2c_select(file, ad)) < 0) {
+          close(file);
           return res;
         }
 
@@ -669,6 +739,7 @@ int main(int argc, char *argv[]) {
         }
 
         if ((res = i2c_select(file, ad)) < 0) {
+          close(file);
           return res;
         }
 
@@ -685,6 +756,7 @@ int main(int argc, char *argv[]) {
 
         bool ok;
         if ((res = ds1307_sanity_check(file, &ok)) < 0) {
+          close(file);
           return res;
         }
 
@@ -703,20 +775,9 @@ int main(int argc, char *argv[]) {
         uint8_t start = ('d' == c) ? DS1307_REGAD_RAM : 0;
         uint8_t count = ('d' == c) ? (DS1307_REGAD_END - DS1307_REGAD_RAM) : DS1307_REGAD_END;
         if ((res = ds1307_dump(file, start, count)) < 0) {
+          close(file);
           return res;
         }
-
-        break;
-      }
-
-      case 'p': {
-        if (file < 0) {
-          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
-          print_help(argv[0]);
-          return -EINVAL;
-        }
-
-        ds1307_print_time(file);
         break;
       }
 
@@ -728,7 +789,38 @@ int main(int argc, char *argv[]) {
           return -EINVAL;
         }
 
-        ds1307_halt(file, 'H' == c);
+        if ((res = ds1307_halt(file, 'H' == c)) < 0) {
+          close(file);
+          return res;
+        }
+        break;
+      }
+
+      case 'p': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_print_time(file)) < 0) {
+          close(file);
+          return res;
+        }
+        break;
+      }
+
+      case 't': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_test_ram(file)) < 0) {
+          close(file);
+          return res;
+        }
         break;
       }
 
