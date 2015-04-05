@@ -483,22 +483,43 @@ int ds1307_set_hfmt(int file, bool h12) {
   return 0;
 }
 
+int ds1307_dump(int file, uint8_t start, uint8_t count) {
+  /* Intended for internal use only. */
+
+  int i, res;
+  uint8_t reg;
+
+  if ((start + count - 1) > 0x3f) {
+    fprintf(stderr, "BUG: end address 0x%02x is out of range!", start + count - 1);
+    return -EINVAL;
+  }
+
+  for (i = 0; i < count; i ++) {
+    if ((res = i2c_read_byte(file, start + i, &reg)) < 0) {
+      return res;
+    }
+    fprintf(stdout, "Register @ 0x%02x: 0x%02x\n", start + i, reg);
+  }
+
+  return 0;
+}
+
 // memory test / sanity check
-// dump ram
 
 /******************************************************************************
  * Option list (operations will be carried out in argument list order):
+ * 1 - set 12H format
+ * 2 - set 24H format
  * a <int> - override address
  * b <int> - set bus number (must be done prior to any other operation)
+ * c - chip sanity check
+ * d - dump RAM
+ * D - dump everything
  * p - print date / time
  * h - clear halt bit
  * H - set halt bit
- * c - chip sanity check
- * 1 - set 12H format
- * 2 - set 24H format
  * TODO:
  * 
- * dump ram
  * ram test
  * set date
  * sqw info
@@ -522,6 +543,8 @@ void print_help(const char *self) {
     -b <int>: set bus number (must be set prior to any operations).\n\
               NOTE: you can use `i2cdetect -l' to list I2C buses present in the system.\n\
     -c      : chip sanity check.\n\
+    -d      : dump the on-chip NV SRAM.\n\
+    -D      : dump all registers, for debugging.\n\
     -h      : clear halt bit (start the clock).\n\
     -H      : set halt bit (pause the clock).\n\
     -p      : print current date and time in the device.\n\
@@ -584,7 +607,7 @@ int main(int argc, char *argv[]) {
   int c;
   int ad = DS1307_DEVAD;
   opterr = 0;
-  while ((c = getopt(argc, argv, "12a:b:cphH")) != -1) {
+  while ((c = getopt(argc, argv, "12a:b:cdDphH")) != -1) {
     switch (c) {
       case '1':
       case '2': {
@@ -666,6 +689,23 @@ int main(int argc, char *argv[]) {
         }
 
         fprintf(stdout, "Sanity check: %s\n", ok ? "PASS" : "FAIL");
+        break;
+      }
+
+      case 'd':
+      case 'D': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        uint8_t start = ('d' == c) ? DS1307_REGAD_RAM : 0;
+        uint8_t count = ('d' == c) ? (DS1307_REGAD_END - DS1307_REGAD_RAM) : DS1307_REGAD_END;
+        if ((res = ds1307_dump(file, start, count)) < 0) {
+          return res;
+        }
+
         break;
       }
 
