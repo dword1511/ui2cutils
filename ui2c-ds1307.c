@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #include <linux/i2c-dev.h>
 
@@ -568,6 +569,102 @@ int ds1307_test_ram(int file) {
   return 0;
 }
 
+int ds1307_get_sqw(int file) {
+  int res;
+  uint8_t reg;
+  const char *freq[] = {"1", "4096", "8192", "32768"};
+
+  if ((res = i2c_read_byte(file, DS1307_REGAD_CTL, &reg)) < 0) {
+    return res;
+  }
+
+  if (reg & DS1307_SQW_EN) {
+    int i = reg & (DS1307_SQW_RS1 | DS1307_SQW_RS0);
+    fprintf(stdout, "Square wave output is %sHz\n", freq[i]);
+  } else {
+    fprintf(stdout, "Square wave output is constantly %s\n", (reg & DS1307_SQW_OUT) ? "HIGH" : "LOW");
+  }
+
+  return 0;
+}
+
+int ds1307_set_sqw(int file, int hz) {
+  /* HZ: 0 = LOW 1 = HIGH 2 = 1Hz 3 = 4kHz 4 = 8kHz 5 = 32kHz */
+
+  int res;
+  const uint8_t reg_table[] = {DS1307_SQW_L, DS1307_SQW_H, DS1307_SQW_1HZ, DS1307_SQW_4KHZ, DS1307_SQW_8KHZ, DS1307_SQW_32KHZ};
+
+  if ((hz < 0) || (hz > 5)) {
+    fprintf(stderr, "Invalid sqaure wave setting number `%d'!\n", hz);
+    return -EINVAL;
+  }
+
+  if ((res = i2c_write_byte(file, DS1307_REGAD_CTL, reg_table[hz])) < 0) {
+    return res;
+  }
+
+  /* User feedback */
+  ds1307_get_sqw(file);
+  return 0;
+}
+
+int ds1307_sync_time(int file) {
+  /* Set time to the system time (losely). */
+  int res;
+  uint8_t reg;
+  bool h12, halt;
+  time_t t = time(NULL);
+  struct tm tm = *localtime(&t);
+
+  /* Read previous settings */
+  if ((res = i2c_read_byte(file, DS1307_REGAD_SEC, &reg)) < 0) {
+    return res;
+  }
+  halt = (reg & DS1307_HALT) ? true : false;
+  if ((res = i2c_read_byte(file, DS1307_REGAD_HRS, &reg)) < 0) {
+    return res;
+  }
+  h12 = (reg & DS1307_12H_MODE) ? true : false;
+
+  /* Set date */
+  if ((res = i2c_write_byte(file, DS1307_REGAD_YRS, i2bcd(tm.tm_year + 1900 - 2000))) < 0) {
+    return res;
+  }
+  if ((res = i2c_write_byte(file, DS1307_REGAD_MON, i2bcd(tm.tm_mon + 1))) < 0) {
+    return res;
+  }
+  if ((res = i2c_write_byte(file, DS1307_REGAD_DAY, i2bcd(tm.tm_mday))) < 0) {
+    return res;
+  }
+  /* Day of week starts from 0 = Sunday... */
+  const uint8_t dow_table[] = {2, 3, 4, 5, 6, 7, 1};
+  if ((res = i2c_write_byte(file, DS1307_REGAD_DAY, dow_table[tm.tm_mday])) < 0) {
+    return res;
+  }
+
+  /* Set time */
+  /* Halt while setting second. TODO: handle leap second (tm.tm_sec can be 60 and 61)! */
+  if ((res = i2c_write_byte(file, DS1307_REGAD_SEC, DS1307_HALT | i2bcd(tm.tm_sec))) < 0) {
+    return res;
+  }
+  if ((res = i2c_write_byte(file, DS1307_REGAD_MIN, i2bcd(tm.tm_min))) < 0) {
+    return res;
+  }
+  /* Always set 24H time first, then set mode to 12H if necessary */
+  if ((res = i2c_write_byte(file, DS1307_REGAD_HRS, i2bcd(tm.tm_hour))) < 0) {
+    return res;
+  }
+
+  if (h12) {
+    ds1307_set_hfmt(file, h12);
+  }
+  if (!halt) {
+    ds1307_halt(file, halt);
+  }
+
+  return 0;
+}
+
 /******************************************************************************
  * Option list (operations will be carried out in argument list order):
  * 1 - set 12H format
@@ -577,15 +674,13 @@ int ds1307_test_ram(int file) {
  * c - chip sanity check
  * d - dump RAM
  * D - dump everything
- * p - print date / time
+ * g - get SQW settings
  * h - clear halt bit
  * H - set halt bit
+ * p - print date / time
+ * s - set SQW settings
+ * S - set date
  * t - test ram
- * TODO:
- * 
- * set date
- * sqw info
- * set sqw
  *****************************************************************************/
 
 void print_help(const char *self) {
@@ -605,18 +700,28 @@ void print_help(const char *self) {
               WARN: use this option only when you know what you are doing!\n\
     -b <int>: set bus number (must be set prior to any operations).\n\
               NOTE: you can use `i2cdetect -l' to list I2C buses present in the\n\
-              system.\n\
+                    system.\n\
     -c      : chip sanity check.\n\
     -d      : dump on-chip NV SRAM.\n\
               NOTE: it is normal for some bits to be 1 after power-on-reset.\n\
     -D      : dump all registers, for debugging.\n\
+    -g      : get current square wave output settings.\n\
     -h      : clear halt bit (start the clock).\n\
     -H      : set halt bit (pause the clock).\n\
     -p      : print current date and time in the device.\n\
+    -s <int>: set square wave output settings:\n\
+                0 = constantly low;\n\
+                1 = constantly high;\n\
+                2 =     1Hz;\n\
+                3 =  4096Hz;\n\
+                4 =  8192Hz;\n\
+                5 = 32768Hz.\n\
+    -S      : synchronize chip time to system time.\n\
+              NOTE: 12/24-hour mode and halting will be perserved.\n\
     -t      : test on-chip NV SRAM.\n\
               NOTE: The chip may go offline during the process, you will need\n\
-              to reset the chip manually. Suggest halting the clock before\n\
-              checking to avoid possible hardware bugs.\n\
+                    to reset the chip manually. Suggest halting the clock\n\
+                    before checking to avoid possible hardware bugs.\n\
   \n\
   Example:\n\
     Print date and time in the DS1307 on i2c-1:\n\
@@ -625,7 +730,7 @@ void print_help(const char *self) {
 }
 
 void handle_bad_opts(void) {
-  if ((optopt == 'a') || (optopt == 'b')) {
+  if ((optopt == 'a') || (optopt == 'b') || (optopt == 's')) {
     fprintf(stderr, "ERROR: option -%c requires an argument.\n\n", optopt);
   } else if (isprint(optopt)) {
     fprintf(stderr, "ERROR: unknown option `-%c'.\n\n", optopt);
@@ -676,7 +781,7 @@ int main(int argc, char *argv[]) {
   int c;
   int ad = DS1307_DEVAD;
   opterr = 0;
-  while ((c = getopt(argc, argv, "12a:b:cdDhHpt")) != -1) {
+  while ((c = getopt(argc, argv, "12a:b:cdDghHps:St")) != -1) {
     switch (c) {
       case '1':
       case '2': {
@@ -781,6 +886,20 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+      case 'g': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_get_sqw(file)) < 0) {
+          close(file);
+          return res;
+        }
+        break;
+      }
+
       case 'h':
       case 'H': {
         if (file < 0) {
@@ -810,6 +929,41 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+      case 's': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        int s;
+        if ((s = read_int(optarg)) < 0) {
+          fprintf(stderr, "ERROR: invalid square wave setting number `%s'.\n\n", optarg);
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_set_sqw(file, s)) < 0) {
+          close(file);
+          return res;
+        }
+        break;
+      }
+
+      case 'S': {
+        if (file < 0) {
+          fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
+          print_help(argv[0]);
+          return -EINVAL;
+        }
+
+        if ((res = ds1307_sync_time(file)) < 0) {
+          close(file);
+          return res;
+        }
+        break;
+      }
+
       case 't': {
         if (file < 0) {
           fprintf(stderr, "ERROR: bus number not set prior to operation.\n\n");
@@ -826,7 +980,7 @@ int main(int argc, char *argv[]) {
 
       case '?': {
         handle_bad_opts();
-        return 1;
+        return -EINVAL;
       }
 
       default: {
