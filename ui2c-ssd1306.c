@@ -651,6 +651,9 @@ int ssd1306_set_fade(int file, bool fade_out, bool fade_in, uint8_t fade_interva
   if (fade_interval > 128) {
     return -EINVAL;
   }
+  if (fade_interval < 8) {
+    fade_interval = 8;
+  }
 
   if ((res = i2c_write_cmd_1b(file, 0x23)) < 0 ) {
     return res;
@@ -828,19 +831,11 @@ int ssd1306_init(int file, int line, int col) {
     return res;
   }
 
+  /* Should be already off, just ensuring. */
   if ((res = ssd1306_set_power(file, false)) < 0 ) {
     return res;
   }
-  if ((res = ssd1306_set_clkdiv(file, 1, 8)) < 0 ) {
-    return res;
-  }
   if ((res = ssd1306_set_mux_ratio(file, line)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_display_offset(file, 0)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_start_line(file, 0)) < 0 ) {
     return res;
   }
   if ((res = ssd1306_set_mem_addr_mode(file, SSD1306_MEMMODE_H)) < 0 ) {
@@ -850,21 +845,6 @@ int ssd1306_init(int file, int line, int col) {
     return res;
   }
   if ((res = ssd1306_set_com_scan(file, true)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_com_pin(file, true, false)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_precharge(file, 4, 1)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_vcomh_desel(file, 4)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_display_test(file, false)) < 0 ) {
-    return res;
-  }
-  if ((res = ssd1306_set_inverse(file, false)) < 0 ) {
     return res;
   }
 
@@ -1070,6 +1050,11 @@ int main (int argc, char *argv[]) {
   ssd1306_init(file, 64, 128);
   sleep(1);
   ssd1306_cls(file, 64, 128);
+  sleep(1);
+  ssd1306_set_inverse(file, true);
+  sleep(1);
+  ssd1306_set_fade(file, true, true, 1);
+  // Do not have to send new frames, it will animate itself.
 
   return 0;
 }
