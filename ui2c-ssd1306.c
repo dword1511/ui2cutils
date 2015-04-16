@@ -1,13 +1,28 @@
-#include <fcntl.h>
-#include <unistd.h>
-#include <ctype.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <errno.h>
 
+#include <fcntl.h>
 #include <linux/i2c-dev.h>
+
+#include <malloc.h>
+#include <strings.h>
+//#include <inttypes.h>
+#include <png.h>
+
+/*
+ * TODO: define and use a ssd1306_t context as follows:
+ * typedef struct {
+ *   int file;
+ *   size_t width;
+ *   size_t heigh;
+ *   uint8_t buffer[0];
+ * } ssd1306_t;
+ */
 
 /* I2C functions */
 
@@ -64,7 +79,7 @@ int i2c_select(int file, int addr) {
 }
 
 /******************************************************************************
- * Device is write-only.
+ * Device is mostly write-only.
  * Frame format: address control data
  * Control: CONT D/C 0 0 0 0 0 0
  * Data   : Encapsulated 8-bit command, parameter or data
@@ -76,7 +91,27 @@ int i2c_write_cmd_1b(int file, uint8_t cmd) {
   uint8_t buf[2] = {SSD1306_CTRL_CMD, cmd};
 
   if ((res = write(file, buf, 2)) < 0) {
-    perror("write() register address / data failed");
+    perror("write() command failed");
+    return res;
+  }
+
+  return 0;
+}
+
+#define SSD1306_CONT_DATA_HDR (0x40)
+/* To avoid copying, caller should prepare the header. */
+int i2c_write_data(int file, uint8_t data[], size_t len) {
+  int res;
+
+  if (NULL == data) {
+    return -EINVAL;
+  }
+  if (SSD1306_CONT_DATA_HDR != data[0]) {
+    return -EINVAL;
+  }
+
+  if ((res = write(file, data, len)) < 0) {
+    perror("write() data failed");
     return res;
   }
 
@@ -451,10 +486,14 @@ int ssd1306_set_mux_ratio(int file, int ratio) {
 
   /* NOTE: controlled by how many line (COM) your display has. */
 
+  if (ratio > 0x40) {
+    return -EINVAL;
+  }
+
   if ((res = i2c_write_cmd_1b(file, 0xa8)) < 0 ) {
     return res;
   }
-  if ((res = i2c_write_cmd_1b(file, ratio - 1)) < 0 ) {
+  if ((res = i2c_write_cmd_1b(file, (ratio - 1) & 0x3f)) < 0 ) {
     return res;
   }
 
@@ -775,6 +814,16 @@ int ssd1306_soft_reset(int file) {
 int ssd1306_init(int file, int line, int col) {
   int res;
 
+  if ((line <= 0) || (col <= 0)) {
+    return -EINVAL;
+  }
+  if ((line > 64) || (col > 128)) {
+    return -EINVAL;
+  }
+  if (((line % 8) != 0) || ((col % 8) != 0)) {
+    return -EINVAL;
+  }
+
   if ((res = ssd1306_soft_reset(file)) < 0 ) {
     return res;
   }
@@ -782,7 +831,7 @@ int ssd1306_init(int file, int line, int col) {
   if ((res = ssd1306_set_power(file, false)) < 0 ) {
     return res;
   }
-  if ((res = ssd1306_set_clkdiv(file, 0, 8)) < 0 ) {
+  if ((res = ssd1306_set_clkdiv(file, 1, 8)) < 0 ) {
     return res;
   }
   if ((res = ssd1306_set_mux_ratio(file, line)) < 0 ) {
@@ -806,7 +855,7 @@ int ssd1306_init(int file, int line, int col) {
   if ((res = ssd1306_set_com_pin(file, true, false)) < 0 ) {
     return res;
   }
-  if ((res = ssd1306_set_precharge(file, 2, 2)) < 0 ) {
+  if ((res = ssd1306_set_precharge(file, 4, 1)) < 0 ) {
     return res;
   }
   if ((res = ssd1306_set_vcomh_desel(file, 4)) < 0 ) {
@@ -825,16 +874,184 @@ int ssd1306_init(int file, int line, int col) {
   if ((res = ssd1306_set_power(file, true)) < 0 ) {
     return res;
   }
+
+  return 0;
+}
+
+int ssd1306_cls(int file, int line, int col) {
+  int res;
+  uint8_t *buf = NULL;
+  const size_t len = line * col / 8 + 1;
+
+  if ((line <= 0) || (col <= 0)) {
+    return -EINVAL;
+  }
+  if ((line > 64) || (col > 128)) {
+    return -EINVAL;
+  }
+  if (((line % 8) != 0) || ((col % 8) != 0)) {
+    return -EINVAL;
+  }
+
+  buf = (uint8_t *)malloc(len);
+  if (NULL == buf) {
+    perror("malloc");
+    return -ENOMEM;
+  }
+
+  bzero(buf, len);
+  buf[0] = SSD1306_CONT_DATA_HDR;
+  res = i2c_write_data(file, buf, len);
+
+  free(buf);
+  return res;
+}
+
+/*
+ * NOTE: will allocate the buffer for all data + SSD1306_CONT_DATA_HDR.
+ * Remember to free.
+ */
+int read_png(char *path, int line, int col, uint8_t *buf[]) {
+  uint8_t header[8];
+  int res;
+  int width, height, y;
+  png_byte color_type;
+  png_byte bit_depth;
+  png_structp png_ptr;
+  png_infop info_ptr;
+  png_bytep *row_pointers;
+  FILE *fp = NULL;
+
+  if ((NULL == path) || (NULL == buf)) {
+    return -EINVAL;
+  }
+  if ((line <= 0) || (col <= 0)) {
+    return -EINVAL;
+  }
+  if ((line > 64) || (col > 128)) {
+    return -EINVAL;
+  }
+  if (((line % 8) != 0) || ((col % 8) != 0)) {
+    return -EINVAL;
+  }
+
+  if (NULL == (fp = fopen(path, "rb"))) {
+    perror("fopen");
+    return -EIO;
+  }
+
+  fread(header, 1, 8, fp);
+  if (0 != png_sig_cmp(header, 0, 8)) {
+    perror("png_sig_cmp");
+    fclose(fp);
+    return -ENOENT;
+  }
+
+  if (NULL == (png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL))) {
+    perror("png_create_read_struct");
+    fclose(fp);
+    return -ENOMEM;
+  }
+
+  if (NULL == (info_ptr = png_create_info_struct(png_ptr))) {
+    perror("png_create_info_struct");
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return -ENOMEM;
+  }
+
+  /*
+   * NOTE: libpng is efficient but quite dirty.
+   * If any error happens afterwards, program will return to this point with an
+   * non-zero return value.
+   */
+  if (0 != (res = setjmp(png_jmpbuf(png_ptr)))) {
+    perror("libpng, init");
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return res;
+  }
+
+  png_init_io(png_ptr, fp);
+  png_set_sig_bytes(png_ptr, 8);
+
+  png_read_info(png_ptr, info_ptr);
+
+  width  = png_get_image_width(png_ptr, info_ptr);
+  height = png_get_image_height(png_ptr, info_ptr);
+  color_type = png_get_color_type(png_ptr, info_ptr);
+  bit_depth  = png_get_bit_depth(png_ptr, info_ptr);
+  /* Just enable interlace handling, we do not need to know which format. */
+  //number_of_passes = png_set_interlace_handling(png_ptr);
+  png_set_interlace_handling(png_ptr);
+
+  if (1 != bit_depth) {
+    fputs("ERROR: only black and white images are allowed!\n", stderr);
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return -ENOENT;
+  }
+  /* NOTE: need capabilities to read sprite. */
+  if ((width != col) || ((height % line) != 0)) {
+    fprintf(stderr, "ERROR: image size %d x %d mismatches the screen!\n", width, height);
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return -ENOENT;
+  }
+
+  png_read_update_info(png_ptr, info_ptr);
+
+  if (0 != (res = setjmp(png_jmpbuf(png_ptr)))) {
+    perror("libpng, reading");
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return res;
+  }
+
+  fprintf(stdout, "Allocating %lu x %u bytes of memory for image...\n", png_get_rowbytes(png_ptr, info_ptr), height);
+  row_pointers = (png_bytep*)malloc(sizeof(png_bytep) * height);
+  if (NULL == row_pointers) {
+    perror("malloc");
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return -ENOMEM;
+  }
+  for (y = 0; y < height; y++) {
+    row_pointers[y] = (png_byte*)malloc(png_get_rowbytes(png_ptr, info_ptr));
+    if (NULL == row_pointers[y]) {
+      perror("malloc");
+      png_destroy_info_struct(png_ptr, &info_ptr);
+      png_destroy_read_struct(&png_ptr, NULL, NULL);
+      fclose(fp);
+      return -ENOMEM;
+    }
+  }
+
+  png_read_image(png_ptr, row_pointers);
+  // pack, flatten and copy into buffer
+
+  png_destroy_info_struct(png_ptr, &info_ptr);
+  png_destroy_read_struct(&png_ptr, NULL, NULL);
+  for (y = 0; y < height; y++) {
+    free(row_pointers[y]);
+  }
+  free(row_pointers);
+  fclose(fp);
+
+  return 0;
 }
 
 /*
  * TODO:
-int ssd1306_cls(int file) {
-  
-}
-
-(send data)
+(send frame)
 (load png)
+(CLI)
+(font & text?)
 */
 
 int main (int argc, char *argv[]) {
@@ -847,6 +1064,12 @@ int main (int argc, char *argv[]) {
   if ((res = i2c_select(file, SSD1306_DEVAD_A)) < 0) {
     return res;
   }
+
+  // TODO: change parameters from line, col to col, line to accommodate the 128x64 habit
+  // TEST ONLY
+  ssd1306_init(file, 64, 128);
+  sleep(1);
+  ssd1306_cls(file, 64, 128);
 
   return 0;
 }
