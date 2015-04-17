@@ -22,6 +22,8 @@
  *   size_t heigh;
  *   uint8_t buffer[0];
  * } ssd1306_t;
+ *
+ * TODO: since malloc is involved, use valgrind to check memory leaks.
  */
 
 /* I2C functions */
@@ -31,6 +33,30 @@
 #define SSD1306_CTRL_DATA (1<<6)
 #define SSD1306_CTRL_CMD  (0<<6)
 #define SSD1306_CTRL_CONT (1<<7)
+
+/* This is how your image displays on the screen, with parameters in this program. */
+int dump_bmp(uint8_t data[], size_t len) {
+  size_t x, y;
+
+  if ((NULL == data) || ((len % 8) != 1)) {
+    fprintf(stdout, "Invalid argument while calling dump_bmp().\n");
+    return -EINVAL;
+  }
+
+  fprintf(stdout, "HDR = 0x%02x\n", data[0]);
+  for (y = 0; y < 64; y ++) {
+    for (x = 0; x < 128; x ++) {
+      fputc((data[(y / 8 * 128) + x + 1] & (1 << (y % 8))) ? '@' : ' ', stdout);
+    }
+    if (x % 128 == 0) {
+      fputc('\n', stdout);
+    }
+  }
+
+  fputc('\n', stdout);
+  fflush(stdout);
+  return 0;
+}
 
 int i2c_open(int bus) {
   const int fn_len = 20;
@@ -371,7 +397,7 @@ int ssd1306_reset_col_start(int file) {
   return ssd1306_set_col_start(file, 0);
 }
 
-#define SSD1306_MEMMODE_H    (0x00)
+#define SSD1306_MEMMODE_H    (0x00) /* Horizontally placed 1x8 blocks, not pixels! */
 #define SSD1306_MEMMODE_V    (0x01)
 #define SSD1306_MEMMODE_PAGE (0x02)
 
@@ -539,21 +565,13 @@ int ssd1306_reset_display_offset(int file) {
 
 int ssd1306_set_com_pin(int file, bool alternate, bool remap) {
   int res;
-  uint8_t param = 0x02;
 
   /* NOTE: highly hardware-specific. */
-
-  if (alternate) {
-    param |= 0x20;
-  }
-  if (remap) {
-    param |= 0x10;
-  }
 
   if ((res = i2c_write_cmd_1b(file, 0xda)) < 0 ) {
     return res;
   }
-  if ((res = i2c_write_cmd_1b(file, param)) < 0 ) {
+  if ((res = i2c_write_cmd_1b(file, 0x02 | (alternate ? 0x10 : 0x00) | (remap ? 0x20 : 0x00))) < 0 ) {
     return res;
   }
 
@@ -814,8 +832,10 @@ int ssd1306_soft_reset(int file) {
   return 0;
 }
 
-int ssd1306_init(int file, int line, int col) {
+int ssd1306_init(int file, int col, int line) {
   int res;
+
+  /* NOTE: use defualts whenever we can. <col> is not used. */
 
   if ((line <= 0) || (col <= 0)) {
     return -EINVAL;
@@ -858,7 +878,7 @@ int ssd1306_init(int file, int line, int col) {
   return 0;
 }
 
-int ssd1306_cls(int file, int line, int col) {
+int ssd1306_cls(int file, int col, int line) {
   int res;
   uint8_t *buf = NULL;
   const size_t len = line * col / 8 + 1;
@@ -887,22 +907,22 @@ int ssd1306_cls(int file, int line, int col) {
   return res;
 }
 
+#define GET_BIT(x, n) ((x) >> (n) & 0x01)
 /*
  * NOTE: will allocate the buffer for all data + SSD1306_CONT_DATA_HDR.
  * Remember to free.
  */
-int read_png(char *path, int line, int col, uint8_t *buf[]) {
+int read_png(char *path, int col, int line, uint8_t *buf[], size_t *len) {
   uint8_t header[8];
   int res;
-  int width, height, y;
-  png_byte color_type;
-  png_byte bit_depth;
+  int width, height, x, y;
+  png_byte depth;
   png_structp png_ptr;
   png_infop info_ptr;
   png_bytep *row_pointers;
   FILE *fp = NULL;
 
-  if ((NULL == path) || (NULL == buf)) {
+  if ((NULL == path) || (NULL == buf) || (NULL == len)) {
     return -EINVAL;
   }
   if ((line <= 0) || (col <= 0)) {
@@ -960,13 +980,11 @@ int read_png(char *path, int line, int col, uint8_t *buf[]) {
 
   width  = png_get_image_width(png_ptr, info_ptr);
   height = png_get_image_height(png_ptr, info_ptr);
-  color_type = png_get_color_type(png_ptr, info_ptr);
-  bit_depth  = png_get_bit_depth(png_ptr, info_ptr);
+  depth  = png_get_bit_depth(png_ptr, info_ptr);
   /* Just enable interlace handling, we do not need to know which format. */
-  //number_of_passes = png_set_interlace_handling(png_ptr);
   png_set_interlace_handling(png_ptr);
 
-  if (1 != bit_depth) {
+  if (1 != depth) {
     fputs("ERROR: only black and white images are allowed!\n", stderr);
     png_destroy_info_struct(png_ptr, &info_ptr);
     png_destroy_read_struct(&png_ptr, NULL, NULL);
@@ -992,7 +1010,9 @@ int read_png(char *path, int line, int col, uint8_t *buf[]) {
     return res;
   }
 
-  fprintf(stdout, "Allocating %lu x %u bytes of memory for image...\n", png_get_rowbytes(png_ptr, info_ptr), height);
+  /* Bytes should be packed (8 horizontal pixels per byte). */
+  size_t bpr = png_get_rowbytes(png_ptr, info_ptr);
+  fprintf(stdout, "Allocating %zu x %u bytes of memory for image...\n", bpr, height);
   row_pointers = (png_bytep*)malloc(sizeof(png_bytep) * height);
   if (NULL == row_pointers) {
     perror("malloc");
@@ -1001,8 +1021,8 @@ int read_png(char *path, int line, int col, uint8_t *buf[]) {
     fclose(fp);
     return -ENOMEM;
   }
-  for (y = 0; y < height; y++) {
-    row_pointers[y] = (png_byte*)malloc(png_get_rowbytes(png_ptr, info_ptr));
+  for (y = 0; y < height; y ++) {
+    row_pointers[y] = (png_byte*)malloc(bpr);
     if (NULL == row_pointers[y]) {
       perror("malloc");
       png_destroy_info_struct(png_ptr, &info_ptr);
@@ -1013,7 +1033,35 @@ int read_png(char *path, int line, int col, uint8_t *buf[]) {
   }
 
   png_read_image(png_ptr, row_pointers);
-  // pack, flatten and copy into buffer
+  /*
+   * Add header, flatten and copy into buffer.
+   * TODO: Need to re-arrange into 1x8 blocks. PNG packs pixels horizontally,
+   * but our display (always) does so vertically (128 line in 64 COM).
+   * For sprites, the sending function should handle following frames by
+   * backtracking after every frame and adding the header.
+   */
+  *len = height * bpr + 1;
+  *buf = malloc(*len);
+  if (NULL == *buf) {
+    perror("malloc");
+    png_destroy_info_struct(png_ptr, &info_ptr);
+    png_destroy_read_struct(&png_ptr, NULL, NULL);
+    fclose(fp);
+    return -ENOMEM;
+  }
+  size_t ptr = 0;
+  (*buf)[ptr] = SSD1306_CONT_DATA_HDR;
+  ptr ++;
+  for (y = 0; y < height / 8; y ++) {
+    for (x = 0; x < width; x ++ ) {
+      (*buf)[ptr] = (GET_BIT(row_pointers[y * 8 + 0][x / 8], 7 - (x % 8)) << 0) | (GET_BIT(row_pointers[y * 8 + 1][x / 8], 7 - (x % 8)) << 1)
+                  | (GET_BIT(row_pointers[y * 8 + 2][x / 8], 7 - (x % 8)) << 2) | (GET_BIT(row_pointers[y * 8 + 3][x / 8], 7 - (x % 8)) << 3)
+                  | (GET_BIT(row_pointers[y * 8 + 4][x / 8], 7 - (x % 8)) << 4) | (GET_BIT(row_pointers[y * 8 + 5][x / 8], 7 - (x % 8)) << 5)
+                  | (GET_BIT(row_pointers[y * 8 + 6][x / 8], 7 - (x % 8)) << 6) | (GET_BIT(row_pointers[y * 8 + 7][x / 8], 7 - (x % 8)) << 7);
+      ptr ++;
+    }
+  }
+  /* TODO: check underrun / overrun if necessary. */
 
   png_destroy_info_struct(png_ptr, &info_ptr);
   png_destroy_read_struct(&png_ptr, NULL, NULL);
@@ -1024,6 +1072,30 @@ int read_png(char *path, int line, int col, uint8_t *buf[]) {
   fclose(fp);
 
   return 0;
+}
+
+int ssd1306_send_png(int file, int col, int line, char *path) {
+  int res;
+  size_t len;
+  uint8_t *buf = NULL;
+
+  if (NULL == path) {
+    return -EINVAL;
+  }
+
+  if ((res = read_png(path, col, line, &buf, &len)) != 0) {
+    return res;
+  }
+  if (len != line * col / 8 + 1) {
+    fprintf(stdout, "NOTE: expect %zu bytes of PNG data, got %zu bytes, image is probably sprites.\n", (size_t)(line * col / 8 + 1), len);
+  }
+
+  res = i2c_write_data(file, buf, len);
+
+  if (buf != NULL) {
+    free(buf);
+  }
+  return res;
 }
 
 /*
@@ -1045,15 +1117,14 @@ int main (int argc, char *argv[]) {
     return res;
   }
 
-  // TODO: change parameters from line, col to col, line to accommodate the 128x64 habit
   // TEST ONLY
-  ssd1306_init(file, 64, 128);
-  sleep(1);
-  ssd1306_cls(file, 64, 128);
-  sleep(1);
-  ssd1306_set_inverse(file, true);
-  sleep(1);
-  ssd1306_set_fade(file, true, true, 1);
+  ssd1306_init(file, 128, 64);
+  ssd1306_cls(file, 128, 64); // SSD1306 may have a SRAM-based GDDRAM, some parts of the graphic are perserved after power cycle.
+  ssd1306_send_png(file, 128, 64, "ui2c_ssd1306_test_static.png");
+//  
+//  sleep(1);
+//  
+//  sleep(1);
   // Do not have to send new frames, it will animate itself.
 
   return 0;
