@@ -11,7 +11,7 @@
 
 #include <malloc.h>
 #include <strings.h>
-//#include <inttypes.h>
+#include <signal.h>
 #include <png.h>
 
 /*
@@ -24,7 +24,25 @@
  * } ssd1306_t;
  *
  * TODO: since malloc is involved, use valgrind to check memory leaks.
+ * TODO: very high sys cpu usage. find a way to optimize.
  */
+
+/* Signal handling. */
+volatile bool stop;
+
+static void sigint_handler(int sig) {
+  stop = true;
+
+  /* Unregister myself. */
+  struct sigaction sia;
+
+  bzero(&sia, sizeof(sia));
+  sia.sa_handler = SIG_DFL;
+
+  if (sigaction(SIGINT, &sia, NULL) < 0) {
+    perror("sigaction(SIGINT, SIG_DFL)");
+  }
+}
 
 /* I2C functions */
 
@@ -911,6 +929,7 @@ int ssd1306_cls(int file, int col, int line) {
 /*
  * NOTE: will allocate the buffer for all data + SSD1306_CONT_DATA_HDR.
  * Remember to free.
+ * For internal use.
  */
 int read_png(char *path, int col, int line, uint8_t *buf[], size_t *len) {
   uint8_t header[8];
@@ -1035,12 +1054,13 @@ int read_png(char *path, int col, int line, uint8_t *buf[], size_t *len) {
   png_read_image(png_ptr, row_pointers);
   /*
    * Add header, flatten and copy into buffer.
-   * TODO: Need to re-arrange into 1x8 blocks. PNG packs pixels horizontally,
+   * Need to re-arrange into 1x8 blocks. PNG packs pixels horizontally,
    * but our display (always) does so vertically (128 line in 64 COM).
    * For sprites, the sending function should handle following frames by
    * backtracking after every frame and adding the header.
    */
-  *len = height * bpr + 1;
+  *len = height * bpr + height / line; /* Every screen needs a header. */
+  fprintf(stdout, "Allocating %zu bytes of memory for buffer...\n", *len);
   *buf = malloc(*len);
   if (NULL == *buf) {
     perror("malloc");
@@ -1050,9 +1070,12 @@ int read_png(char *path, int col, int line, uint8_t *buf[], size_t *len) {
     return -ENOMEM;
   }
   size_t ptr = 0;
-  (*buf)[ptr] = SSD1306_CONT_DATA_HDR;
-  ptr ++;
   for (y = 0; y < height / 8; y ++) {
+    if (y % (line / 8) == 0) {
+      /* First line (page) of a frame, time to insert header. */
+      (*buf)[ptr] = SSD1306_CONT_DATA_HDR;
+      ptr ++;
+    }
     for (x = 0; x < width; x ++ ) {
       (*buf)[ptr] = (GET_BIT(row_pointers[y * 8 + 0][x / 8], 7 - (x % 8)) << 0) | (GET_BIT(row_pointers[y * 8 + 1][x / 8], 7 - (x % 8)) << 1)
                   | (GET_BIT(row_pointers[y * 8 + 2][x / 8], 7 - (x % 8)) << 2) | (GET_BIT(row_pointers[y * 8 + 3][x / 8], 7 - (x % 8)) << 3)
@@ -1098,6 +1121,95 @@ int ssd1306_send_png(int file, int col, int line, char *path) {
   return res;
 }
 
+/* Each pass of the sprite, for internal use. */
+int ssd1306_send_png_sprite_pass(int file, uint8_t buf[], size_t len, size_t flen) {
+  int res;
+
+  if (((len % flen) != 0) || (NULL == buf)) {
+    return -EINVAL;
+  }
+
+  while ((len > 0) && (!stop)) {
+    if ((res = i2c_write_data(file, buf, flen)) < 0) {
+      return res;
+    }
+    buf += flen;
+    len -= flen;
+  }
+
+  return 0;
+}
+
+/*
+ * NOTE:
+ * loop == 0: loop forever until killed by signal.
+ * loop == 1: no loop, single pass.
+ */
+int ssd1306_send_png_sprite(int file, int col, int line, char *path, int delay_ms, int loop) {
+  int res;
+  size_t len;
+  struct sigaction sia;
+  uint8_t *buf = NULL;
+
+  if ((delay_ms < 0) || (delay_ms >= INT_MAX / 1000) || (loop < 0) || (NULL == path)) {
+    return -EINVAL;
+  }
+
+  if ((res = read_png(path, col, line, &buf, &len)) != 0) {
+    return res;
+  }
+
+  /* Setup SIGINT handler. NOTE: there is no need to unregister it manually. */
+  bzero(&sia, sizeof(sia));
+  sia.sa_handler = sigint_handler;
+  stop = false;
+  if ((res = sigaction(SIGINT, &sia, NULL)) < 0) {
+    perror("sigaction");
+    if (buf != NULL) {
+      free(buf);
+    }
+    return res;
+  }
+
+  size_t flen = col * line / 8 + 1; /* Size of each frame. */
+  if (loop == 0) {
+
+    while (!stop) {
+      if ((res = ssd1306_send_png_sprite_pass(file, buf, len, flen)) < 0) {
+        if (buf != NULL) {
+          free(buf);
+        }
+        return res;
+      }
+      usleep(delay_ms * 1000);
+    }
+  } else {
+    for (; loop > 0; loop --) {
+      if ((res = ssd1306_send_png_sprite_pass(file, buf, len, flen)) < 0) {
+        if (buf != NULL) {
+          free(buf);
+        }
+        return res;
+      }
+      usleep(delay_ms * 1000);
+    }
+  }
+
+  bzero(&sia, sizeof(sia));
+  sia.sa_handler = SIG_DFL;
+  if ((res = sigaction(SIGINT, &sia, NULL)) < 0) {
+    perror("sigaction unregister");
+    if (buf != NULL) {
+      free(buf);
+    }
+    return res;
+  }
+  if (buf != NULL) {
+    free(buf);
+  }
+  return 0;
+}
+
 /*
  * TODO:
 (send frame)
@@ -1121,6 +1233,8 @@ int main (int argc, char *argv[]) {
   ssd1306_init(file, 128, 64);
   ssd1306_cls(file, 128, 64); // SSD1306 may have a SRAM-based GDDRAM, some parts of the graphic are perserved after power cycle.
   ssd1306_send_png(file, 128, 64, "ui2c_ssd1306_test_static.png");
+  sleep(1);
+  ssd1306_send_png_sprite(file, 128, 64, "ui2c_ssd1306_test_sprite.png", 0, 0);
 //  
 //  sleep(1);
 //  
