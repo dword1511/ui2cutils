@@ -667,24 +667,27 @@ int ds1307_sync_time(int file) {
 
 /******************************************************************************
  * Option list (operations will be carried out in argument list order):
- * 1 - set 12H format
- * 2 - set 24H format
+ * 1       - set 12H format
+ * 2       - set 24H format
  * a <int> - override address
  * b <int> - set bus number (must be done prior to any other operation)
- * c - chip sanity check
- * d - dump RAM
- * D - dump everything
- * g - get SQW settings
- * h - clear halt bit
- * H - set halt bit
- * p - print date / time
- * s - set SQW settings
- * S - set date
- * t - test ram
+ * c       - chip sanity check
+ * d       - dump RAM
+ * D       - dump everything
+ * g       - get SQW settings
+ * h       - clear halt bit
+ * H       - set halt bit
+ * p       - print date / time
+ * s <int> - set SQW settings
+ * S       - set date
+ * t       - test ram
  *****************************************************************************/
 
 void print_help(const char *self) {
   fprintf(stderr, "\
+  Userspace I2C utility for: Maxim DS1307 RTC\n\
+  (C) Chi Zhang (dword1511) <zhangchi866@gmail.com>\n\
+  \n\
   Usage:\n\
     %s -b <bus number> [list of operations]\n\
   \n\
@@ -980,6 +983,7 @@ int main(int argc, char *argv[]) {
 
       case '?': {
         handle_bad_opts();
+        print_help(argv[0]);
         return -EINVAL;
       }
 
