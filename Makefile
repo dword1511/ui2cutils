@@ -1,7 +1,7 @@
 CC     := gcc
 CFLAGS := -g -Wall
 
-PROGS = ui2c-ds1307 ui2c-ssd1306 ui2c-tmp007
+PROGS = ui2c-ds1307 ui2c-ssd1306 ui2c-tmp007 ui2c-mlx90614
 
 all: $(PROGS)
 
