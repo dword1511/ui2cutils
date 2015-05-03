@@ -199,6 +199,7 @@ int tmp007_print_all(int file) {
  * l       - local temperature
  * o       - object temperature
  * TODO: F/C switch
+ * TODO: L - Oversample + wait local become stable
  *****************************************************************************/
 
 void print_help(const char *self) {

@@ -4,6 +4,7 @@
 
 *.o
 a.out
+*.html
 ui2c-ds1307
 ui2c-ssd1306
 ui2c-tmp007

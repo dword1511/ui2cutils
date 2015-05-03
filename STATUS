@@ -1,0 +1,51 @@
+Manufacturer             Model       Function                    Status (* = in preparation)
+---------------------------------------------------------------------------------------------------
+(Generic)                24*         EEPROM                      NO PLAN (See README)
+Maxim                    DS1307      RTC                         Complete (Needs BUG Check)
+Maxim                    DS3231      RTC                         *Planned (Hardware Available)
+Solomon                  SSD1306     Display-OLED                *Basic Functions Tested, need CLI
+Texas Instrument         TMP007      Thermometer-IR              Basic Operations
+Melexis                  MLX90614    Thermometer-IR              Basic Operations
+Measurement Specialties  HTU21D      RH Sensor                   *Planned (Hardware Available)
+AMS                      TSL2591     ALS                         *Planned (Hardware Available)
+STMicroelectronics       VL6180      PALS-ToF                    *Planned (Hardware Available)
+Rohm                     BH1750FVI   ALS                         *Planned (Hardware Available)
+NXP                      TEA5767HN   FM Receiver                 *Planned (Hardware Available)
+Bosch                    BMP180      Barometer                   *Planned
+NXP                      PN532       NFC                         *Planned
+Honeywell                HMC5883L    Magnetometer                *Planned
+Holtek                   HT16K33     Segment Display Driver-LED  *Planned
+Microchip                MCP9808     Thermometer-Precision       *Planned
+Texas Instrument         ADS1015     ADC-12bit+4Ch+PGA           *Planned
+
+# Possible stuff (that are in some hardware and accessible somehow)
+NXP                      PN544       NFC
+NXP                      TFA9890     Audio PA-Class D
+Texas Instrument         TPA6165     Interface-Headset
+Texas Instrument         TMP108      Thermometer-Generic
+Texas Instrument         DRV2605     Motor Driver
+Texas Instrument         LM3556      LED Driver
+Synaptics                S3402B      Touch Input
+Samsung                  S5K5B3G     CIS
+OmniVision               OV7725      CIS
+OmniVision               OV10820     CIS
+OmniVision               OV5647      CIS
+OmniVision               OV2643      CIS
+OmniVision               OV660       ISP
+Texas Instrument         TPS65217    PMU
+NXP                      TDA19988    HDMI Driver
+Haoyu Microelectronics   HYM8563     RTC
+Active Semiconductor     ACT8846     PMU
+ITE                      IT66121     HDMI Driver
+Silan                    SC8113      Video AFE
+NXP                      TDA18273    Tunner
+Rafael Micro             R820T       Tunner
+STEricsson               AB8500      Analog Baseband
+STMicroelectronics       LSM303DLHC  MEMS-IMU
+Analog Devices           ADP1653     LED Driver
+AMS                      AS3676      LED Driver
+Texas Instrument         LM3561      LED Driver
+Avago                    APDS-9702   Proximity-IR
+STMicroelectronics       LIS3DSH     MEMS-Accelerator
+Cirrus Logic             CS43L22     Audio CODEC
+# SMBus Dell Acer

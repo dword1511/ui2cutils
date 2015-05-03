@@ -25,6 +25,11 @@ ui2c-ssd1306: ui2c-ssd1306.o
 	@echo "  LD    " $@
 	@$(CC) $^ $(LDFLAGS) -lpng -o $@
 
+# Documentation
+README.html: README.md
+	@echo "  MD    " $@
+	@markdown $< > $@
+
 .PHONY: clean
 
 clean:

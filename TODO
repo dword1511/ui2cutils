@@ -1,0 +1,15 @@
+
+TODO:
+* libgoptwrapper for simpler code
+* libui2c for simpler code
+* libfont for displays
+* libpngwrapper for displays?
+* libtemperature for F/C?
+* Collapse long writes into loop for shorter code
+* Always use smbus functions (faster? robust?)
+
+Moto X (2012)
+I2C bus 10 has 3 devices w/o driver: 0x0e (NOT AK8975) 0x58 0x60
+
+Dell E5430
+0x28 on panel DDC

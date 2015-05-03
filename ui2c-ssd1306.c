@@ -25,6 +25,8 @@
  *
  * TODO: since malloc is involved, use valgrind to check memory leaks.
  * TODO: very high sys cpu usage. find a way to optimize.
+ * TODO: fold consecutive calls into loops with array
+ * TODO: try SMBus block write and quick write
  */
 
 /* Signal handling. */
