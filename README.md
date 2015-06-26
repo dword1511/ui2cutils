@@ -65,8 +65,8 @@ I2C on Raspberry Pi
 Not tested yet.
 
 
-Devices that will NOT get supported
-===================================
+Devices that will NOT get supported (for now)
+=============================================
 
 24xx EEPROM
 -----------
@@ -78,3 +78,21 @@ To register a device, simply do something like the following:
     cat /sys/bus/i2c/devices/x-0050/eeprom | hd
 
 For more details see [the kernel document](https://www.kernel.org/doc/Documentation/i2c/instantiating-devices).
+Besides, it is quite easy to use `i2cdump` from `i2c-tools` to read it from userspace.
+
+PN532 NFC
+---------
+
+The `libnfc` project provides many userspace tools to communicate with the chip over UART/I2C/SPI.
+See [`libnfc` on github](https://github.com/nfc-tools/libnfc) for repository and
+[Lady Ada's instructions](https://learn.adafruit.com/adafruit-pn532-rfid-nfc/libnfc) for a general tutorial,
+and also [Libnfc:configuration](http://nfc-tools.org/index.php?title=Libnfc:configuration) for how to specify devices.
+When scanning for device, you might need the `-i` (intrusive) flag.
+The bad thing is that you can not control which I2C bus it scans.
+
+MPU-9150 MEMS-IMU
+-----------------
+
+There is a [userspace tool](https://github.com/kriswiner/MPU-9150) that can control the IMU over I2C.
+Tested with Beaglebone Black. The DMP firmware is embedded.
+You may want to fix some of its algorithm or force it to print some low-level compass heading.

@@ -1,6 +1,6 @@
 Manufacturer             Model       Function                    Status (* = in preparation)
 ---------------------------------------------------------------------------------------------------
-(Generic)                24*         EEPROM                      NO PLAN (See README)
+(Generic)                24*         EEPROM                      KERNEL DRIVER USABLE (See README)
 Maxim                    DS1307      RTC                         Complete (Needs BUG Check)
 Maxim                    DS3231      RTC                         *Planned (Hardware Available)
 Solomon                  SSD1306     Display-OLED                *Basic Functions Tested, need CLI
@@ -10,13 +10,14 @@ Measurement Specialties  HTU21D      RH Sensor                   *Planned (Hardw
 AMS                      TSL2591     ALS                         *Planned (Hardware Available)
 STMicroelectronics       VL6180      PALS-ToF                    *Planned (Hardware Available)
 Rohm                     BH1750FVI   ALS                         *Planned (Hardware Available)
-NXP                      TEA5767HN   FM Receiver                 *Planned (Hardware Available)
-Bosch                    BMP180      Barometer                   *Planned
-NXP                      PN532       NFC                         *Planned
-Honeywell                HMC5883L    Magnetometer                *Planned
-Holtek                   HT16K33     Segment Display Driver-LED  *Planned
-Microchip                MCP9808     Thermometer-Precision       *Planned
-Texas Instrument         ADS1015     ADC-12bit+4Ch+PGA           *Planned
+NXP                      TEA5767HN   FM Receiver                 Very Basic Operations
+Bosch                    BMP180      Barometer                   *Planned (Hardware Available)
+NXP                      PN532       NFC                         ALTERNATIVES AVAILABLE (See README)
+InvenSense               MPU-9150    MEMS-IMU                    ALTERNATIVES AVAILABLE (See README)
+Honeywell                HMC5883L    Magnetometer                *Planned (Hardware Available)
+Holtek                   HT16K33     Segment Display Driver-LED  *Planned (Hardware Available) [single 8-segment/dual 8-segment/single 16-segment/matrix]
+Microchip                MCP9808     Thermometer-Precision       *Planned (Hardware Available)
+Texas Instrument         ADS1015     ADC-12bit+4Ch+PGA           *Planned (Hardware Available)
 
 # Possible stuff (that are in some hardware and accessible somehow)
 NXP                      PN544       NFC
@@ -49,3 +50,4 @@ Avago                    APDS-9702   Proximity-IR
 STMicroelectronics       LIS3DSH     MEMS-Accelerator
 Cirrus Logic             CS43L22     Audio CODEC
 # SMBus Dell Acer
+# Mouse sensor
